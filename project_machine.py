@@ -1,3 +1,4 @@
+import html
 import streamlit as st
 import pandas as pd
 import requests
@@ -102,7 +103,7 @@ df, cos_sim, knn_model, svd_sim, tfidf_matrix = build_ml_pipeline()
 def fetch_poster(movie_id: int) -> str:
     url = (
         f"https://api.themoviedb.org/3/movie/{movie_id}"
-        f"?api_key=4adf8eb0fed7ef903388eb2201d1e0ae"
+        f"?api_key=8265bd1679663a7ea12ac168da84d2e8&language=en-US"
     )
     try:
         data = requests.get(url, timeout=5).json()
@@ -288,23 +289,37 @@ if st.button('Show Recommendations'):
     rec_indices, rec_sims = MODEL_FN[model_choice](idx, top_k=6)
     rec_titles            = df.iloc[rec_indices]['title'].tolist()
 
-    # ── Movie cards  (unchanged from original) ───────────────────────────────
-    st.write(f"### Results for: {selected_movie}")
+    # ── Movie cards ───────────────────────────────────────────────────────────
+    # Use st.markdown (not st.write) so the heading stays in the same render
+    # context and never auto-escapes surrounding HTML.
+    st.markdown(
+        f"### Results for: {html.escape(selected_movie)}",
+        unsafe_allow_html=True,
+    )
     cols = st.columns(6)
     for i, (movie_df_idx, sim_score) in enumerate(zip(rec_indices, rec_sims)):
         with cols[i]:
-            movie_id = df.iloc[movie_df_idx].movie_id
-            st.markdown(f'''
+            movie_id    = df.iloc[movie_df_idx].movie_id
+            # Escape the title so characters like &, <, >, ", ' never break
+            # the HTML string and cause the card to render as raw text.
+            safe_title  = html.escape(df.iloc[movie_df_idx].title)
+            poster_url  = fetch_poster(movie_id)
+            st.markdown(
+                f'''
                 <div class="movie-card">
-                    <img src="{fetch_poster(movie_id)}" style="width:100%; border-radius:5px;">
+                    <img src="{poster_url}"
+                         style="width:100%; border-radius:5px;"
+                         onerror="this.src='https://via.placeholder.com/500x750?text=No+Poster'">
                     <p style="color:white; font-size:0.8rem; margin-top:10px; font-weight:bold;">
-                        {df.iloc[movie_df_idx].title}
+                        {safe_title}
                     </p>
                     <p style="color:#B20710; font-size:0.75rem; margin:0;">
                         Score: {sim_score:.3f}
                     </p>
                 </div>
-            ''', unsafe_allow_html=True)
+                ''',
+                unsafe_allow_html=True,
+            )
 
     # ── Sidebar analysis ─────────────────────────────────────────────────────
     if show_analysis:
