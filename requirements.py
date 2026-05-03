@@ -1,4 +1,7 @@
-pandas 
-scikit-learn
-requests
 streamlit
+pandas
+requests
+numpy
+matplotlib
+seaborn
+scikit-learn
