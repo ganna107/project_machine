@@ -10,9 +10,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.neighbors import NearestNeighbors
 from sklearn.decomposition import TruncatedSVD
 
-# ─────────────────────────────────────────────
-# PAGE CONFIG & STYLING (unchanged)
-# ─────────────────────────────────────────────
+
 st.set_page_config(page_title="AI Movie Recommender", layout="wide")
 
 st.markdown("""
@@ -47,49 +45,23 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# ML PIPELINE  –  built once, shared across all models via @st.cache_resource
-# ─────────────────────────────────────────────────────────────────────────────
 @st.cache_resource
 def build_ml_pipeline():
-    """
-    Load the dataset and train all three recommendation models.
 
-    Pipeline
-    --------
-    Raw text (tags)
-        └─► TF-IDF matrix  (n_movies × vocab)
-              ├─► Model A │ Cosine Similarity matrix  (n × n)
-              ├─► Model B │ NearestNeighbors (cosine, brute)
-              └─► TruncatedSVD  →  latent matrix  (n × 100)
-                        └─► Model C │ Cosine Similarity in latent space
-
-    Returns
-    -------
-    df           : pandas DataFrame with movie metadata
-    cos_sim      : (n × n) float32 cosine-similarity matrix      [Model A]
-    knn_model    : fitted sklearn NearestNeighbors               [Model B]
-    svd_sim      : (n × n) float32 latent-space similarity       [Model C]
-    tfidf_matrix : sparse TF-IDF matrix (needed by KNN at query time)
-    """
     df = pd.read_csv('movies_cleaned.csv')
 
-    # ── Step 1: TF-IDF vectorisation ─────────────────────────────────────────
     tfidf        = TfidfVectorizer(stop_words='english')
-    tfidf_matrix = tfidf.fit_transform(df['tags'])          # sparse (n, vocab)
+    tfidf_matrix = tfidf.fit_transform(df['tags'])         
 
-    # ── Model A │ Content-Based Cosine Similarity ─────────────────────────────
-    cos_sim = cosine_similarity(tfidf_matrix).astype(np.float32)   # (n, n)
+    cos_sim = cosine_similarity(tfidf_matrix).astype(np.float32)   
 
-    # ── Model B │ Instance-Based K-Nearest Neighbors ──────────────────────────
     knn_model = NearestNeighbors(metric='cosine', algorithm='brute', n_neighbors=7)
     knn_model.fit(tfidf_matrix)
 
-    # ── Model C │ Latent-Factor SVD (Matrix Factorization) ───────────────────
-    N_COMPONENTS = 100                                       # latent dimensions
+    N_COMPONENTS = 100                                      
     svd          = TruncatedSVD(n_components=N_COMPONENTS, random_state=42)
-    latent       = svd.fit_transform(tfidf_matrix)          # (n, 100)
-    svd_sim      = cosine_similarity(latent).astype(np.float32)    # (n, n)
+    latent       = svd.fit_transform(tfidf_matrix)         
+    svd_sim      = cosine_similarity(latent).astype(np.float32)    
 
     return df, cos_sim, knn_model, svd_sim, tfidf_matrix
 
@@ -97,9 +69,6 @@ def build_ml_pipeline():
 df, cos_sim, knn_model, svd_sim, tfidf_matrix = build_ml_pipeline()
 
 
-# ─────────────────────────────────────────────
-# POSTER FETCHING  (unchanged)
-# ─────────────────────────────────────────────
 def fetch_poster(movie_id: int) -> str:
     url = (
         f"https://api.themoviedb.org/3/movie/{movie_id}"
@@ -112,45 +81,24 @@ def fetch_poster(movie_id: int) -> str:
         return "https://via.placeholder.com/500x750?text=No+Poster"
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# RECOMMENDATION ENGINES  –  one function per model, identical output contract
-# ─────────────────────────────────────────────────────────────────────────────
 def recommend_cosine(movie_idx: int, top_k: int = 6):
-    """
-    Model A │ Content-Based Cosine Similarity.
-
-    Ranks every movie by its pre-computed cosine distance to the query in
-    the original TF-IDF feature space.
-    """
     scores  = list(enumerate(cos_sim[movie_idx]))
     scores  = sorted(scores, key=lambda x: x[1], reverse=True)
-    top     = scores[1: top_k + 1]                          # skip self at rank 0
+    top     = scores[1: top_k + 1]                         
     indices = [i       for i, _ in top]
     sims    = [round(float(s), 4) for _, s in top]
     return indices, sims
 
 
 def recommend_knn(movie_idx: int, top_k: int = 6):
-    """
-    Model B │ Instance-Based K-Nearest Neighbors (cosine metric).
-
-    Queries the fitted NearestNeighbors index directly in TF-IDF space.
-    Cosine distance is converted to similarity as  sim = 1 − dist.
-    """
     query           = tfidf_matrix[movie_idx]
     distances, nbrs = knn_model.kneighbors(query, n_neighbors=top_k + 1)
-    indices = list(nbrs[0][1:])                             # drop self
+    indices = list(nbrs[0][1:])                            
     sims    = [round(1 - float(d), 4) for d in distances[0][1:]]
     return indices, sims
 
 
 def recommend_svd(movie_idx: int, top_k: int = 6):
-    """
-    Model C │ Latent-Factor Modeling via Truncated SVD (Matrix Factorization).
-
-    Similarity is measured in the compressed 100-dimensional latent space, so
-    recommendations reflect hidden thematic patterns rather than raw term overlap.
-    """
     scores  = list(enumerate(svd_sim[movie_idx]))
     scores  = sorted(scores, key=lambda x: x[1], reverse=True)
     top     = scores[1: top_k + 1]
@@ -159,7 +107,6 @@ def recommend_svd(movie_idx: int, top_k: int = 6):
     return indices, sims
 
 
-# Unified dispatcher — maps UI label → recommender function
 MODEL_FN = {
     "Cosine Similarity":          recommend_cosine,
     "KNN":                        recommend_knn,
@@ -167,36 +114,19 @@ MODEL_FN = {
 }
 
 
-# ─────────────────────────────────────────────
-# EVALUATION METRICS
-# ─────────────────────────────────────────────
 def compute_metrics(sims: list) -> dict:
-    """Return average and maximum similarity scores for the Top-K results."""
     return {
         "Average Similarity": round(float(np.mean(sims)), 4),
         "Maximum Similarity": round(float(np.max(sims)), 4),
     }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SIDEBAR ANALYSIS & VISUALISATIONS
-# ─────────────────────────────────────────────────────────────────────────────
-def _dark_axes(fig, ax):
-    """Apply dark theme to a matplotlib figure / axes pair."""
-    fig.patch.set_facecolor('#0e1117')
-    ax.set_facecolor('#1a1c23')
-    ax.tick_params(colors='white')
-    ax.xaxis.label.set_color('white')
-    ax.yaxis.label.set_color('white')
-
 
 def plot_heatmap(rec_indices: list, rec_titles: list) -> plt.Figure:
-    """Pairwise cosine-similarity heatmap of the recommended movies."""
     sub   = cos_sim[np.ix_(rec_indices, rec_indices)]
     lbls  = [t[:14] + "…" if len(t) > 14 else t for t in rec_titles]
 
     fig, ax = plt.subplots(figsize=(7, 5))
-    _dark_axes(fig, ax)
     sns.heatmap(
         sub, annot=True, fmt=".2f",
         xticklabels=lbls, yticklabels=lbls,
@@ -212,9 +142,7 @@ def plot_heatmap(rec_indices: list, rec_titles: list) -> plt.Figure:
 
 
 def plot_bar_chart(rec_sims: list) -> plt.Figure:
-    """Horizontal bar chart of similarity scores per recommendation rank."""
     fig, ax = plt.subplots(figsize=(7, 4))
-    _dark_axes(fig, ax)
     bars = ax.bar(
         [f"#{i + 1}" for i in range(len(rec_sims))],
         rec_sims,
@@ -235,46 +163,30 @@ def plot_bar_chart(rec_sims: list) -> plt.Figure:
 
 def show_sidebar_analysis(rec_indices: list, rec_sims: list,
                            rec_titles: list, model_name: str):
-    """
-    Unified sidebar analysis panel:
-      1. Model Performance  — avg / max similarity metrics
-      2. Similarity Flow    — ranked list with scores
-      3. Heatmap            — inter-recommendation similarity matrix
-      4. Bar Chart          — score per rank
-    """
-    # ── 1. Model Performance ─────────────────────────────────────────────────
-    st.sidebar.subheader("📊 Model Performance")
+    st.sidebar.subheader(" Model Performance")
     m = compute_metrics(rec_sims)
     st.sidebar.success(f"Model: {model_name}")
     st.sidebar.info(f"Average Similarity: {m['Average Similarity']}")
     st.sidebar.warning(f"Maximum Similarity: {m['Maximum Similarity']}")
 
-    # ── 2. Similarity Flow ────────────────────────────────────────────────────
-    st.sidebar.write("### 🎬 Similarity Flow")
+    st.sidebar.write("###  Similarity Flow")
     for rank, (title, score) in enumerate(zip(rec_titles, rec_sims), start=1):
         st.sidebar.markdown(
             f"**#{rank}** &nbsp; `{score:.4f}` &nbsp; — &nbsp; {title}"
         )
 
-    # ── 3. Heatmap ────────────────────────────────────────────────────────────
-    st.sidebar.write("### 🔥 Similarity Heatmap")
+    st.sidebar.write("###  Similarity Heatmap")
     st.sidebar.pyplot(plot_heatmap(rec_indices, rec_titles))
 
-    # ── 4. Bar Chart ──────────────────────────────────────────────────────────
-    st.sidebar.write("### 📈 Similarity Bar Chart")
+    st.sidebar.write("###  Similarity Bar Chart")
     st.sidebar.pyplot(plot_bar_chart(rec_sims))
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# MAIN UI  –  layout / widgets / card HTML identical to original
-# ─────────────────────────────────────────────────────────────────────────────
 st.markdown("<h1>AI Movie Recommender</h1>", unsafe_allow_html=True)
 
 with st.sidebar:
     st.header("Visualization")
     show_analysis = st.checkbox("Show AI Analysis (Sidebar)")
 
-    # Three-model selector  (replaces old A* / UCS / DFS radio)
     model_choice = st.radio(
         "Model:",
         ["Cosine Similarity", "KNN", "SVD (Matrix Factorization)"]
@@ -285,13 +197,9 @@ selected_movie = st.selectbox("Select a movie you like:", df['title'].values)
 if st.button('Show Recommendations'):
     idx = df[df['title'] == selected_movie].index[0]
 
-    # ── Dispatch to chosen ML model ──────────────────────────────────────────
     rec_indices, rec_sims = MODEL_FN[model_choice](idx, top_k=6)
     rec_titles            = df.iloc[rec_indices]['title'].tolist()
 
-    # ── Movie cards ───────────────────────────────────────────────────────────
-    # Use st.markdown (not st.write) so the heading stays in the same render
-    # context and never auto-escapes surrounding HTML.
     st.markdown(
         f"### Results for: {html.escape(selected_movie)}",
         unsafe_allow_html=True,
@@ -300,8 +208,6 @@ if st.button('Show Recommendations'):
     for i, (movie_df_idx, sim_score) in enumerate(zip(rec_indices, rec_sims)):
         with cols[i]:
             movie_id    = df.iloc[movie_df_idx].movie_id
-            # Escape the title so characters like &, <, >, ", ' never break
-            # the HTML string and cause the card to render as raw text.
             safe_title  = html.escape(df.iloc[movie_df_idx].title)
             poster_url  = fetch_poster(movie_id)
             st.markdown(
@@ -321,6 +227,5 @@ if st.button('Show Recommendations'):
                 unsafe_allow_html=True,
             )
 
-    # ── Sidebar analysis ─────────────────────────────────────────────────────
     if show_analysis:
         show_sidebar_analysis(rec_indices, rec_sims, rec_titles, model_choice)
